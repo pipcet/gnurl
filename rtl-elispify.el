@@ -49,6 +49,9 @@
 	 ((looking-at-p "\"")
 	  (insert "\\")
 	  (forward-char))
+	 ((looking-at-p "\\\\")
+	  (insert "\\")
+	  (forward-char))
 	 ((forward-char)))))
     (insert "\"")))
 
@@ -241,13 +244,14 @@
   (let* ((hash (make-hash-table))
 	 (forms (myread hash)))
     (dolist (form forms)
-      (let ((p0 (car (gethash form hash)))
-	    (p1 (cdr (gethash form hash))))
-	(goto-char p0)
-	(sit-for 0.1)
-	(pcase form
-	  (`(define_insn . ,rest)
-	   (mangle-define-insn rest hash))))))
+      (when (consp form)
+	(let ((p0 (car (gethash form hash)))
+	      (p1 (cdr (gethash form hash))))
+	  (goto-char p0)
+	  (sit-for 0.1)
+	  (pcase form
+	    (`(define_insn . ,rest)
+	     (mangle-define-insn rest hash)))))))
   (condition-case error
       (while (not (eobp))
 	(let* ((opoint (point-marker))
