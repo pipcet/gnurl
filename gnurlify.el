@@ -43,6 +43,17 @@
 							   "c"))
 							attrs
 							","))))))))
+
+(defun resultify-cc-attr (ccattr operation)
+  (when ccattr
+    (let ((attrs (split-string ccattr ",")))
+      (and (not (equal attrs '("none")))
+	   (= (length attrs) 1)
+	   (member (car attrs)
+		   '("set_czn" "set_zn" "set_vzn" "set_n" "plus"))
+	   `(set (reg:CCNZ REG_CC)
+		 (compare:CCNZ ,operation (const_int 0)))))))
+
 (defun add-clobbers ()
   (goto-char (point-min))
   (let* ((hash (make-hash-table))
@@ -64,10 +75,71 @@
 			(goto-char p0)
 			(- (current-column)
 			   (length "(vector (parallel (vector")))))
-	    (goto-char p1)
+	    (goto-char p0)
+	    (insert (format "%S" clobber))
 	    (insert "\n")
-	    (insert (make-string ind ?\ ))
-	    (insert (format "%S" clobber))))))))
+	    (insert (make-string ind ?\ ))))))))
+
+(defun add-results ()
+  (goto-char (point-min))
+  (let* ((hash (make-hash-table))
+	 (forms (myread hash)))
+    (dolist (form forms)
+      (let* ((plist (parse-define-insn form hash))
+	     (ccattr (find-attr (plist-get plist :attribute) "cc"))
+	     (templ (plist-get plist :template))
+	     (operation (caddr (cadr (cadr (cadr templ)))))
+	     (result (resultify-cc-attr ccattr operation)))
+	(when result
+	  (let* ((vector1 (cadr templ))
+		 (parallel (cadr vector1))
+		 (insn (cadr parallel))
+		 (ps (gethash insn hash))
+		 (p0 (car ps))
+		 (p1 (cdr ps))
+		 (ind (save-excursion
+			(goto-char p0)
+			(- (current-column)
+			   (length "(vector (parallel (vector")))))
+	    (goto-char p0)
+	    (insert (format "%S" result))
+	    (insert "\n")
+	    (insert (make-string ind ?\ ))))))))
+
+(defun add-results-2 ()
+  (goto-char (point-min))
+  (while (let* ((hash (make-hash-table))
+		(form (myread-single-form hash)))
+	   (when form
+	     (save-excursion
+	       (goto-char (car (gethash form hash)))
+	       (insert (buffer-substring (car (gethash form hash))
+					 (cdr (gethash form hash))))
+	       t)))))
+
+(defun all-conses (expr)
+  (if (consp expr)
+      (append (list expr)
+	      (all-conses (car expr))
+	      (all-conses (cdr expr)))
+    nil))
+
+(defun dupify-insns ()
+  (goto-char (point-min))
+  (let* ((hash (make-hash-table))
+	 (forms (myread hash)))
+    (dolist (form forms)
+      (let ((hash2 (make-hash-table :test 'equal)))
+	(dolist (cons (all-conses form))
+	  (pcase cons
+	    (`(match_operand ,mode ,n . ,rest)
+	     (if (gethash cons hash2)
+		 (progn
+		   (goto-char (car (gethash cons hash)))
+		   (delete-region (point)
+				  (cdr (gethash cons hash)))
+		   (insert (format "%S" `(match_dup ,mode ,n))))
+	       (puthash cons t hash2)))))))))
 
 (defun make-all-insns-parallel ()
   (goto-char (point-min))
@@ -104,7 +176,9 @@
 
 (defun convert-rtl-buffer ()
   (make-all-insns-parallel)
-  (add-clobbers)
+  (add-results-2)
+  (add-results)
+  (dupify-insns)
   (make-all-insns-serial))
 
 (defun gnurlify (filename)
