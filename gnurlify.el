@@ -1,8 +1,10 @@
 ;; -*- lexical-binding: t -*-
 
-(defun parse-define-insn (expr hash)
+(defun parse-define-insn (expr hash &optional tag)
+  (unless tag
+    (setq tag 'define_insn))
   (and (consp expr)
-       (eq (car expr) 'define_insn)
+       (eq (car expr) tag)
        (let* ((rest (cdr expr))
 	      plist)
 	 (when (stringp (car rest))
@@ -54,12 +56,12 @@
 	   `(set (reg:CCNZ REG_CC)
 		 (compare:CCNZ ,operation (const_int 0)))))))
 
-(defun add-clobbers ()
+(defun add-clobbers (&optional tag)
   (goto-char (point-min))
   (let* ((hash (make-hash-table))
 	 (forms (myread hash)))
     (dolist (form forms)
-      (let* ((plist (parse-define-insn form hash))
+      (let* ((plist (parse-define-insn form hash tag))
 	     (ccattr (find-attr (plist-get plist :attribute) "cc"))
 	     (templ (plist-get plist :template))
 	     (n (1+ (max-operand templ)))
@@ -80,12 +82,12 @@
 	    (insert "\n")
 	    (insert (make-string ind ?\ ))))))))
 
-(defun add-results ()
+(defun add-results (&optional tag)
   (goto-char (point-min))
   (let* ((hash (make-hash-table))
 	 (forms (myread hash)))
     (dolist (form forms)
-      (let* ((plist (parse-define-insn form hash))
+      (let* ((plist (parse-define-insn form hash tag))
 	     (ccattr (find-attr (plist-get plist :attribute) "cc"))
 	     (templ (plist-get plist :template))
 	     (operation (caddr (cadr (cadr (cadr templ)))))
@@ -106,16 +108,36 @@
 	    (insert "\n")
 	    (insert (make-string ind ?\ ))))))))
 
-(defun add-results-2 ()
+(defun add-results-23 ()
   (goto-char (point-min))
   (while (let* ((hash (make-hash-table))
 		(form (myread-single-form hash)))
 	   (when form
-	     (save-excursion
-	       (goto-char (car (gethash form hash)))
-	       (insert (buffer-substring (car (gethash form hash))
-					 (cdr (gethash form hash))))
+	     (let ((str (buffer-substring (car (gethash form hash))
+					  (cdr (gethash form hash)))))
+	       (aset str 1 ?2)
+	       (save-excursion
+		 (goto-char (car (gethash form hash)))
+		 (insert str)
+		 (insert "\n\n"))
+	       (aset str 1 ?3)
+	       (save-excursion
+		 (goto-char (car (gethash form hash)))
+		 (insert str)
+		 (insert "\n\n"))
 	       t)))))
+
+(defun add-splitters (tag)
+  (goto-char (point-min))
+  (let* ((hash (make-hash-table))
+	 (forms (myread hash)))
+    (dolist (form forms)
+      (let* ((plist (parse-define-insn form hash tag))
+	     (ccattr (find-attr (plist-get plist :attribute) "cc"))
+	     (templ (plist-get plist :template)))
+	(when templ
+	  (insert (format "(define_insn_and_split %S" (plist-get plist :name)))
+	  (insert ")\n\n"))))))
 
 (defun all-conses (expr)
   (if (consp expr)
@@ -176,8 +198,10 @@
 
 (defun convert-rtl-buffer ()
   (make-all-insns-parallel)
-  (add-results-2)
-  (add-results)
+  (add-results-23)
+  (add-results 'define_insn)
+  (add-clobbers '2efine_insn)
+  (add-splitters '3efine_insn)
   (dupify-insns)
   (make-all-insns-serial))
 

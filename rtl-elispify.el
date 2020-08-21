@@ -51,13 +51,9 @@
 	  (forward-char)
 	  (let ((list (pop stack)))
 	    (push (nreverse list) (car stack)))
-	  (while (= (length stack) 1)
-	    (cond ((eobp) (puthash (caar stack) (cons (pop p0stack) (point-marker)) hash) (throw 'return (caar stack)))
-		  ((looking-at-p ";") (myread-skip-comment))
-		  ((looking-at-p "[ \t\n]") (myread-skip-whitespace))
-		  ((puthash (caar stack) (cons (pop p0stack) (point-marker)) hash)
-		   (throw 'return (caar stack)))))
-	  (puthash (caar stack) (cons (pop p0stack) (point-marker)) hash))
+	  (puthash (caar stack) (cons (pop p0stack) (point-marker)) hash)
+	  (if (= (length stack) 1)
+	      (throw 'return (caar stack))))
 	 ((push (read (current-buffer)) (car stack))))))))
 
 (defun elispify-braced-string ()
