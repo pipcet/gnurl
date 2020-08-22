@@ -283,7 +283,7 @@
 	(let ((p0 (car (gethash form hash)))
 	      (p1 (cdr (gethash form hash))))
 	  (goto-char p0)
-	  (sit-for 0.1)
+	  (sit-for 0)
 	  (pcase form
 	    (`(define_insn . ,rest)
 	     (mangle-define-insn rest hash)))))))

@@ -70,35 +70,6 @@
 	 ;;    (setq plist (plist-put plist :operands hash))))
 	 plist)))
 
-(defun parse-define-insn-and-split (expr hash &optional tag)
-  (unless tag
-    (setq tag 'define_insn_and_split))
-  (and (consp expr)
-       (eq (car expr) tag)
-       (let* ((rest (cdr expr))
-	      plist)
-	 (when (stringp (car rest))
-	   (setq plist (plist-put plist :name (pop rest))))
-	 (when (consp (car rest))
-	   (setq plist (plist-put plist :template (pop rest))))
-	 (when (stringp (car rest))
-	   (setq plist (plist-put plist :condition (pop rest))))
-	 (when (consp rest)
-	   (setq plist (plist-put plist :assembler (pop rest))))
-	 (when (stringp (car rest))
-	   (setq plist (plist-put plist :split-condition (pop rest))))
-	 (when (consp (car rest))
-	   (setq plist (plist-put plist :replacement (pop rest))))
-	 (when (stringp (car rest))
-	   (setq plist (plist-put plist :preparation (pop rest))))
-	 (when (consp rest)
-	   (setq plist (plist-put plist :attribute (pop rest))))
-	 ;; (cpcase (extract-operands (plist-get plist :template))
-	 ;;   (`(,hash . ,template)
-	 ;;    (setq plist (plist-put plist :template template))
-	 ;;    (setq plist (plist-put plist :operands hash))))
-	 plist)))
-
 (defun parse-define-insn (expr hash &optional tag)
   (unless tag
     (setq tag 'define_insn))
@@ -134,16 +105,18 @@
 (defun clobberify-cc-attr (ccattr n)
   (when ccattr
     (let ((attrs (split-string ccattr ",")))
-      (if (equal attrs '("none"))
+      (if (or (equal attrs '("none"))
+	      (equal attrs '("compare")))
 	  nil
 	(if (= (length attrs) 1)
 	    `(clobber:CC (reg:CC REG_CC))
-	  `(clobber:CC (match_scratch:CC ,n ,(mapconcat (lambda (str)
-							 (if (equal str "none")
-							     "X"
-							   "c"))
+	  `(clobber:CC (match_scratch:CC ,n,(concat "="
+					     (mapconcat (lambda (str)
+							  (if (equal str "none")
+							      "X"
+							    "c"))
 							attrs
-							","))))))))
+							",")))))))))
 
 (defun resultify-cc-attr (ccattr operation)
   (when ccattr
@@ -211,6 +184,7 @@
 			(- (current-column)
 			   (length "(vector (parallel (vector")))))
 	    (goto-char p0)
+	    (sit-for 0)
 	    (insert (format "%S" result))
 	    (insert "\n")
 	    (insert (make-string ind ?\ ))
@@ -220,7 +194,8 @@
 	      (insert "*"))
 	    (goto-char (car (gethash form hash)))
 	    (insert oldstr)
-	    (insert "\n\n")))))))
+	    (when (not (equal oldstr ""))
+	      (insert "\n\n"))))))))
 
 (defun fix-peepholes (clobbered-insns)
   (goto-char (point-min))
@@ -279,6 +254,7 @@
 		    (- (current-column)
 		       (length "(vector (parallel (vector")))))
 	(goto-char p1)
+	(sit-for 0)
 	(insert "\n")
 	(insert (make-string ind ?\ ))
 	(insert (format "%S" clobber))
@@ -304,6 +280,7 @@
 	     (ap1 (cdr aps)))
 	(when templ
 	  (goto-char p0)
+	  (sit-for 0)
 	  (insert (format "(define_insn_and_split %S\n"
 			  (plist-get plist :name)))
 	  (insert (format "  %s\n"
