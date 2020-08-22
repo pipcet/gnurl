@@ -85,7 +85,7 @@
 	   `(set (reg:CCNZ REG_CC)
 		 (compare:CCNZ ,operation (const_int 0)))))))
 
-(defun add-clobbers (&optional tag)
+(defun add-clobbers (clobbered-insns)
   (goto-char (point-min))
   (let* ((hash (make-hash-table))
 	 (forms (myread hash)))
@@ -113,7 +113,8 @@
 	  (goto-char (car (gethash form hash)))
 	  (forward-char 14)
 	  (unless (looking-at-p "\\*")
-	    (insert "*")))))))
+	    (insert "*"))
+	  (puthash templ t clobbered-insns))))))
 
 (defun add-results (&optional tag)
   (goto-char (point-min))
@@ -183,7 +184,8 @@
 	 (templ (plist-get plist :template))
 	 (n (1+ (max-operand templ)))
 	 (clobber (clobberify-cc-attr ccattr n)))
-    (when clobber
+    (if (not clobber)
+	nil
       (let* ((vector1 (cadr new-insn-pattern))
 	     (parallel (cadr vector1))
 	     (insn (cadr parallel))
@@ -197,7 +199,8 @@
 	(goto-char p1)
 	(insert "\n")
 	(insert (make-string ind ?\ ))
-	(insert (format "%S" clobber))))))
+	(insert (format "%S" clobber))
+	t))))
 
 (defun add-splitters ()
   (goto-char (point-min))
@@ -233,7 +236,8 @@
 	    (insert (format "\n  %s" (buffer-substring-no-properties ap0 ap1))))
 	  (insert ")\n\n")
 	  (goto-char (1+ p9))
-	  (fix-splitter))))))
+	  (unless (fix-splitter)
+	    (delete-region (point) p0)))))))
 
 (defun all-conses (expr)
   (if (consp expr)
@@ -256,7 +260,10 @@
 		   (goto-char (car (gethash cons hash)))
 		   (delete-region (point)
 				  (cdr (gethash cons hash)))
-		   (insert (format "%S" `(match_dup ,mode ,n))))
+		   (insert (format "%S"
+				   (if (numberp mode)
+				       `(match_dup ,mode)
+				     `(match_dup ,mode ,n)))))
 	       (puthash cons t hash2)))))))))
 
 (defun make-all-insns-parallel ()
@@ -293,12 +300,13 @@
 	   (delete-char 2)))))))
 
 (defun convert-rtl-buffer ()
-  (make-all-insns-parallel)
-  (add-splitters)
-  (add-clobbers)
-  (add-results)
-  (dupify-insns)
-  (make-all-insns-serial))
+  (let ((clobbered-insns (make-hash-table :test 'equal)))
+    (make-all-insns-parallel)
+    (add-splitters)
+    (add-clobbers clobbered-insns)
+    (add-results)
+    (dupify-insns)
+    (make-all-insns-serial)))
 
 (defun gnurlify (filename)
   (interactive "f")
