@@ -107,12 +107,13 @@
 
 (defun max-operand (expr)
   (cond
+   ((pcase expr
+      (`(match_dup ,n . ,rest) n)
+      (`(,(or 'match_scratch 'match_operand) ,keyword ,n . ,rest) (if (keywordp keyword) n keyword))))
    ((consp expr)
     (max (max-operand (car expr))
 	 (max-operand (cdr expr))))
-   ((numberp expr)
-    expr)
-   (-1.0e+INF)))
+   (0)))
 
 (defun clobberify-cc-attr (ccattr n &optional force)
   (when ccattr
@@ -120,16 +121,17 @@
       (if (or (equal attrs '("none"))
 	      (equal attrs '("compare")))
 	  nil
-	(if (or force
-		(= (length attrs) 1))
-	    `(clobber (reg:CC REG_CC))
-	  `(clobber (match_scratch:CC ,n,(concat "="
-					     (mapconcat (lambda (str)
-							  (if (equal str "none")
-							      "X"
-							    "c"))
-							attrs
-							",")))))))))
+	(cond ((= (length attrs) 1)
+	       `(clobber (reg :CC REG_CC)))
+	      (force
+	       `(clobber (match_dup ,n)))
+	      (`(clobber (match_scratch:CC ,n,(concat "="
+						      (mapconcat (lambda (str)
+								   (if (equal str "none")
+								       "X"
+								     "c"))
+								 attrs
+								 ","))))))))))
 
 (defun resultify-cc-attr (ccattr operation)
   (when ccattr
@@ -140,6 +142,16 @@
 		   '("set_czn" "set_zn" "set_vzn" "set_n" "plus"))
 	   `(set (reg:CCNZ REG_CC)
 		 (compare:CCNZ ,operation (const_int 0)))))))
+
+(defun find-last-real-insn (parallel)
+  (catch 'return
+    (setq parallel (cdr parallel))
+    (let ((last (car parallel)))
+      (while (consp (cdr parallel))
+	(pcase (car parallel)
+	  (`(clobber . ,rest) (throw 'return last))
+	  (`,rest (setq last rest) (setq parallel (cdr parallel)))))
+      (throw 'return last))))
 
 (defun add-clobbers (clobbered-insns)
   (goto-char (point-min))
@@ -154,7 +166,7 @@
 	(when clobber
 	  (let* ((vector1 (cadr templ))
 		 (parallel (cadr vector1))
-		 (insn (cadr parallel))
+		 (insn (find-last-real-insn parallel))
 		 (ps (gethash insn hash))
 		 (p0 (car ps))
 		 (p1 (cdr ps))
@@ -164,6 +176,7 @@
 			   (length "(vector (parallel (vector")))))
 	    (goto-char p1)
 	    (insert "\n")
+	    (setq ind (max ind 0))
 	    (insert (make-string ind ?\ ))
 	    (insert (format "%S" clobber)))
 	  (goto-char (car (gethash form hash)))
@@ -188,7 +201,7 @@
 			  (cdr (gethash form hash))))
 		 (vector1 (cadr templ))
 		 (parallel (cadr vector1))
-		 (insn (cadr parallel))
+		 (insn (find-last-real-insn parallel))
 		 (ps (gethash insn hash))
 		 (p0 (car ps))
 		 (p1 (cdr ps))
@@ -200,6 +213,7 @@
 	    (sit-for 0)
 	    (insert (format "%S" result))
 	    (insert "\n")
+	    (setq ind (max ind 0))
 	    (insert (make-string ind ?\ ))
 	    (goto-char (car (gethash form hash)))
 	    (forward-char 14)
@@ -258,7 +272,7 @@
 	nil
       (let* ((vector1 (cadr new-insn-pattern))
 	     (parallel (cadr vector1))
-	     (insn (cadr parallel))
+	     (insn (find-last-real-insn parallel))
 	     (ps (gethash insn hash))
 	     (p0 (car ps))
 	     (p1 (cdr ps))
@@ -269,6 +283,7 @@
 	(goto-char p1)
 	(sit-for 0)
 	(insert "\n")
+	(setq ind (max ind 0))
 	(insert (make-string ind ?\ ))
 	(insert (format "%S" clobber))
 	t))))
@@ -282,6 +297,8 @@
 	     (attrs (plist-get plist :attribute))
 	     (ccattr (find-attr (plist-get plist :attribute) "cc"))
 	     (templ (plist-get plist :template))
+	     (n (1+ (max-operand templ)))
+	     (clobber (clobberify-cc-attr ccattr n t))
 	     (ps (gethash form hash))
 	     (p0 (car ps))
 	     (p9 (copy-marker (1- p0)))
@@ -303,7 +320,11 @@
 	  (insert (format "  %S\n" "reload_completed"))
 	  (insert (format "  %s\n"
 			  (buffer-substring-no-properties tp0 tp1)))
-	  (insert (format "  %S" ""))
+	  (pcase clobber
+	    (`(clobber (match_dup . ,rest1) . ,rest2)
+	     (insert (format "  \"operands[%s] = avr_gen_cc_clobber (curr_insn);\"" n)))
+	    (_
+	     (insert (format "  \"\"" n))))
 	  (when attrs
 	    (insert (format "\n  %s" (buffer-substring-no-properties ap0 ap1))))
 	  (insert ")\n\n")
