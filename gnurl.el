@@ -356,7 +356,7 @@
 		   (insert (format "%S"
 				   (if (numberp mode)
 				       `(match_dup ,mode)
-				     `(match_dup ,mode ,n)))))
+				     `(match_dup ,n)))))
 	       (puthash cons t hash2)))))))))
 
 (defun make-all-insns-parallel ()
