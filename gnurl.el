@@ -417,7 +417,6 @@
     (goto-char (point-min))
     (gnurl-to-rtl)
     (write-file (concat filename ".new"))))
-;; -*- lexical-binding: t -*-
 
 (defun gnurl-to-rtl-braced-string ()
   (let* ((p0 (point))
@@ -542,8 +541,6 @@
 	   (gnurl-to-rtl-string))
 	  ((let ((p (point))
 		 (sym (read (current-buffer)))))))))
-
-;; -*- lexical-binding: t -*-
 
 (defun myread-skip-comment ()
   (while (not (eolp))
@@ -851,4 +848,3 @@
 	    (`(define_insn ,name (vector (parallel (vector . ,rest)) . ,rest3) . ,rest2)
 	     (warn "parallel in a define_insn %S" (point))))))
     (error nil)))
-;; -*- lexical-binding: t -*-
