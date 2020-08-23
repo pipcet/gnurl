@@ -41,6 +41,14 @@
 	 ;;    (setq plist (plist-put plist :operands hash))))
 	 plist)))
 
+(defun find-cc-reference (plist)
+  (catch 'return
+    (dolist (cons (all-conses plist))
+      (pcase cons
+	(`(REG_CC . ,rest) (throw 'return t))
+	(`(match_scratch :CC . ,rest) (throw 'return t))
+	(`("cc" "none") (throw 'return t))))))
+
 (defun parse-define-insn-and-split (expr hash &optional tag)
   (unless tag
     (setq tag 'define_insn_and_split))
@@ -68,7 +76,9 @@
 	 ;;   (`(,hash . ,template)
 	 ;;    (setq plist (plist-put plist :template template))
 	 ;;    (setq plist (plist-put plist :operands hash))))
-	 plist)))
+	 (if (find-cc-reference plist)
+	     nil
+	   plist))))
 
 (defun parse-define-insn (expr hash &optional tag)
   (unless tag
@@ -91,7 +101,9 @@
 	 ;;   (`(,hash . ,template)
 	 ;;    (setq plist (plist-put plist :template template))
 	 ;;    (setq plist (plist-put plist :operands hash))))
-	 plist)))
+	 (if (find-cc-reference plist)
+	     nil
+	   plist))))
 
 (defun max-operand (expr)
   (cond
@@ -102,15 +114,16 @@
     expr)
    (-1.0e+INF)))
 
-(defun clobberify-cc-attr (ccattr n)
+(defun clobberify-cc-attr (ccattr n &optional force)
   (when ccattr
     (let ((attrs (split-string ccattr ",")))
       (if (or (equal attrs '("none"))
 	      (equal attrs '("compare")))
 	  nil
-	(if (= (length attrs) 1)
-	    `(clobber:CC (reg:CC REG_CC))
-	  `(clobber:CC (match_scratch:CC ,n,(concat "="
+	(if (or force
+		(= (length attrs) 1))
+	    `(clobber (reg:CC REG_CC))
+	  `(clobber (match_scratch:CC ,n,(concat "="
 					     (mapconcat (lambda (str)
 							  (if (equal str "none")
 							      "X"
@@ -240,7 +253,7 @@
 	 (ccattr (find-attr attributes "cc"))
 	 (templ (plist-get plist :template))
 	 (n (1+ (max-operand templ)))
-	 (clobber (clobberify-cc-attr ccattr n)))
+	 (clobber (clobberify-cc-attr ccattr n t)))
     (if (not clobber)
 	nil
       (let* ((vector1 (cadr new-insn-pattern))
@@ -313,7 +326,7 @@
       (let ((hash2 (make-hash-table :test 'equal)))
 	(dolist (cons (all-conses form))
 	  (pcase cons
-	    (`(match_operand ,mode ,n . ,rest)
+	    (`(,(or 'match_operand 'match_scratch) ,mode ,n . ,rest)
 	     (if (gethash cons hash2)
 		 (progn
 		   (goto-char (car (gethash cons hash)))
