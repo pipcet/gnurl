@@ -134,14 +134,15 @@
 								 ","))))))))))
 
 (defun resultify-cc-attr (ccattr operation)
-  (when ccattr
-    (let ((attrs (split-string ccattr ",")))
-      (and (not (equal attrs '("none")))
-	   (= (length attrs) 1)
-	   (member (car attrs)
-		   '("set_czn" "set_zn" "set_vzn" "set_n" "plus"))
-	   `(set (reg:CCNZ REG_CC)
-		 (compare:CCNZ ,operation (const_int 0)))))))
+  (catch 'return
+    (when ccattr
+      (let ((attrs (split-string ccattr ",")))
+	(dolist (attr attrs)
+	  (unless (member attr
+			  '("set_czn" "set_zn" "set_vzn" "set_n" "plus"))
+	    (throw 'return nil))))
+      `(set (reg:CCNZ REG_CC)
+	    (compare:CCNZ ,operation (const_int 0))))))
 
 (defun find-last-real-insn (parallel)
   (catch 'return
