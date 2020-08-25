@@ -47,6 +47,7 @@
       (pcase cons
 	(`(REG_CC . ,rest) (throw 'return t))
 	(`(match_scratch :CC . ,rest) (throw 'return t))
+	(`(match_scratch :CCM . ,rest) (throw 'return t))
 	(`("cc" "none") (throw 'return t))))))
 
 (defun parse-define-insn-and-split (expr hash &optional tag)
@@ -132,6 +133,11 @@
 								     "c"))
 								 attrs
 								 ","))))))))))
+(defun filter-cc-attr (ccattr)
+  (let ((attrs (split-string ccattr)))
+    (mapcar (lambda (attr) (if (member attr
+				       '("set_czn" "set_zn" "set_vzn"))
+			       t nil)))))
 
 (defun resultify-cc-attr (ccattr operation)
   (catch 'return
@@ -139,7 +145,7 @@
       (let ((attrs (split-string ccattr ",")))
 	(dolist (attr attrs)
 	  (unless (member attr
-			  '("set_czn" "set_zn" "set_vzn" "set_n" "plus"))
+			  '("set_czn" "set_zn" "set_vzn"))
 	    (throw 'return nil))))
       `(set (reg:CCNZ REG_CC)
 	    (compare:CCNZ ,operation (const_int 0))))))
@@ -397,8 +403,8 @@
   (let ((clobbered-insns (make-hash-table :test 'equal)))
     (make-all-insns-parallel)
     (add-splitters)
-    (add-clobbers clobbered-insns)
     (add-results)
+    (add-clobbers clobbered-insns)
     (fix-peepholes clobbered-insns)
     (dupify-insns)
     (make-all-insns-serial)))
