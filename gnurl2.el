@@ -11,6 +11,20 @@
    (indentation :initarg :indentation
 		:accessor ldom-indentation)))
 
+(defun ldom-length (str)
+  (let ((len 0))
+    (dotimes (i (length str))
+      (let ((c (aref str i))
+	    (nolen (get-text-property i 'nolen str)))
+	(cond (nolen)
+	      ((eq c ?\t)
+	       (setq len (* 8 (/ (+ len 7) 8))))
+	      ((incf len)))))
+    len))
+
+(defun ldom-current-column ()
+  (ldom-length (buffer-substring (point-at-bol) (point))))
+
 (defun ldom-skip-comment ()
   (while (not (eolp))
     (forward-char 1)))
@@ -50,19 +64,7 @@
 	  (when (= (length stack) 1)
 	    (throw 'return (nreverse (car stack)))))
 	 ((push `(quote ,(read (current-buffer))) (car stack)))))
-    (error "hit EOB"))))
-
-(pcase (ldom :val '(3))
-  ((eieio (:val l))
-   (message "%S" l)))
-
-(ldom-subst `(,a ,b . ,c) `(,b ,a . ,c))
-
-(pcase test
-  ((pattern) pattern) ; a pattern
-  ((pattern2) (pattern2)) ; another pattern
-  ;; a third pattern
-  ((pattern 3) (pattern3)))
+    (throw 'eob))))
 
 (defun lisp-badness (start end)
   (let ((badness 0))
@@ -84,7 +86,6 @@
     (with-temp-buffer
       (insert string)
       (emacs-lisp-mode)
-      (indent-region (point-min) (point-max))
       (goto-char (point-min))
       (while (< (point) (point-max))
 	(cond ((looking-at-p "[[(]")
@@ -142,10 +143,12 @@
 
 (defun lisp-reindent (beg end)
   (interactive "r")
-  (let ((str (buffer-substring-no-properties beg end)))
-    (goto-char beg)
-    (delete-region beg end)
-    (insert (lisp-find-candidates str))))
+  (let* ((str (buffer-substring-no-properties beg end))
+	 (newstr (lisp-find-candidates str)))
+    (unless (equal str newstr)
+      (goto-char beg)
+      (delete-region beg end)
+      (insert newstr))))
 
 (defun ldom-calculate-indentation (pos)
   (save-excursion
@@ -166,11 +169,15 @@
 				      (< (current-column) i))
 			    (forward-char))
 			  (when (= (current-column) i)
-			    (setq str (concat str (propertize (string
-							       (char-after)))))
+			    (setq str (concat str
+					      (buffer-substring (point)
+								(1+ (point)))))
 			    (throw 'next t))))))))
       (goto-char pos)
       str)))
+
+(defun ldom-current-indentation ()
+  (ldom-length (ldom-calculate-indentation (point))))
 
 (defun parse-define-peephole (expr hash &optional tag)
   (unless tag
@@ -677,6 +684,14 @@
       (emacs-lisp-mode)
       (put-text-property (point-min) (point-max)
 			 'lisp-indent-function 0)
+      (goto-char (point-min))
+      (when nil
+	(catch 'eob
+	  (while (< (point) (point-max))
+	    (while (let ((p0 (point)))
+		     (ldom-read-form-1 (make-hash-table))
+		     (and (lisp-reindent p0 (point))
+			  (goto-char p0)))))))
       (indent-region (point-min) (point-max))
       (setq str (buffer-string)))
     (erase-buffer)
@@ -703,6 +718,45 @@
 	  (insert "]")))))
   (goto-char (point-min))
   (while (not (eobp))
+    (cond ((looking-at-p ";")
+	   (myread-skip-comment))
+	  ((looking-at-p "[ \t\n]")
+	   (myread-skip-whitespace))
+	  ((looking-at-p "[][()]")
+	   (forward-char))
+	  ((looking-at-p ":")
+	   (while (looking-back " ")
+	     (forward-char -1)
+	     (delete-char 1))
+	   (forward-char))
+	  ((looking-at-p "\"{")
+	   (gnurl-to-rtl-braced-string))
+	  ((looking-at-p "\"")
+	   (gnurl-to-rtl-string))
+	  ((let ((p (point))
+		 (sym (read (current-buffer)))))))))
+
+(defun elispified-rtl-to-rtl-region (beg end)
+  (interactive "r")
+  (let ((hash (make-hash-table))
+	conses)
+    (myread hash)
+    (maphash (lambda (key val)
+	       (push key conses))
+	     hash)
+    (dolist (form conses)
+      (when (eq (car-safe form) 'vector)
+	(save-excursion
+	  (goto-char (car (gethash form hash)))
+	  (delete-region (point)
+			 (+ (point) (length "(vector ")))
+	  (insert "["))
+	(save-excursion
+	  (goto-char (1- (cdr (gethash form hash))))
+	  (delete-region (point) (1+ (point)))
+	  (insert "]")))))
+  (goto-char beg)
+  (while (< (point) end)
     (cond ((looking-at-p ";")
 	   (myread-skip-comment))
 	  ((looking-at-p "[ \t\n]")
@@ -790,6 +844,18 @@
 
 (defun elispify-rtl ()
   (while (not (eobp))
+    (cond
+     ((looking-at-p "{")
+      (elispify-braced-string))
+     ((looking-at-p "\"")
+      (elispify-string))
+     ((looking-at-p ";")
+      (elispify-comment))
+     ((forward-char)))))
+
+(defun elispify-rtl-region (beg end)
+  (goto-char beg)
+  (while (< (point) end)
     (cond
      ((looking-at-p "{")
       (elispify-braced-string))
@@ -996,3 +1062,13 @@
 	    (`(define_insn ,name (vector (parallel (vector . ,rest)) . ,rest3) . ,rest2)
 	     (warn "parallel in a define_insn %S" (point))))))
     (error nil)))
+
+(defun rtl-reindent (beg end)
+  (interactive "r")
+  (setq beg (copy-marker beg))
+  (setq end (copy-marker end))
+  (elispify-rtl-region beg end)
+  (lisp-reindent beg end)
+  (elispified-rtl-to-rtl-region beg end)
+  (set-mark beg)
+  (goto-char end))
