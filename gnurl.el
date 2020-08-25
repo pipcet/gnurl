@@ -262,6 +262,53 @@
 		 (insert "\n\n"))
 	       t)))))
 
+(defun explode-comma-string (str)
+    `(alts ,@(split-string str ",")))
+
+(defun explode-constraint-string (constraint)
+  (let ((prefix "")
+	alts)
+    (cond
+     ((= (length constraint) 0))
+     ((eq (aref constraint 0) ?=)
+      (setq prefix "=")
+      (setq constraint (substring constraint 1)))
+     ((eq (aref constraint 0) ?%)
+      (setq prefix "%")
+      (setq constraint (substring constraint 1))))
+    (setq alts (split-string constraint ","))
+    `(alts ,@(mapcar (lambda (str) (concat prefix str)) alts))))
+
+(defun explode-comma-strings-in-templ (templ)
+  (dolist (cons (all-conses templ))
+    (pcase cons
+      (`(match_operand ,(and mode (pred 'keywordp))
+		       ,number
+		       ,predicate
+		       . ,constraint)
+       (setcar constraint (explode-constraint-string constraint)))
+      (`(match_operand ,number
+		       ,(and predicate (pred 'stringp))
+		       . ,constraint)
+       (setcar constraint (explode-constraint-string constraint)))
+      (`(match_scratch ,(and mode (pred 'keywordp))
+		       ,number
+		       . ,constraint)
+       (setcar constraint (explode-constraint-string constraint)))
+      (`(set_attr "cc" . ,constraint)
+       (setcar constraint (explode-comma-string constraint))))))
+
+(defun filter-alts-in-templ (templ bools)
+  (dolist (cons (all-conses templ))
+    (pcase cons
+      (`(alts . ,alts)
+       (let (newalts)
+	 (dolist (alt alts)
+	   (when (car bools)
+	     (push alt newalts))
+	   (setq bools (cdr bools)))
+	 (setcdr cons (nreverse newalts)))))))
+
 (defun fix-splitter ()
   (let* ((hash (make-hash-table))
 	 (form (myread-single-form hash))
@@ -561,7 +608,7 @@
   (let ((stack (list nil))
 	(p0stack (list (point-marker))))
     (while (not (eobp))
-      (cond
+      (cond 
        ((looking-at-p ";")
 	(myread-skip-comment))
        ((looking-at-p "[ \t\n]")
