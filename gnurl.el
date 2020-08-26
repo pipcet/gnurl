@@ -135,20 +135,14 @@
 								 ","))))))))))
 (defun filter-cc-attr (ccattr)
   (let ((attrs (split-string ccattr)))
-    (mapcar (lambda (attr) (if (member attr
-				       '("set_czn" "set_zn" "set_vzn"))
-			       t nil)))))
+    (mapcar (lambda (attr) (and (member attr
+					'("set_czn" "set_zn" "set_vzn"))
+				t)))))
 
 (defun resultify-cc-attr (ccattr operation)
-  (catch 'return
-    (when ccattr
-      (let ((attrs (split-string ccattr ",")))
-	(dolist (attr attrs)
-	  (unless (member attr
-			  '("set_czn" "set_zn" "set_vzn"))
-	    (throw 'return nil))))
-      `(set (reg:CCNZ REG_CC)
-	    (compare:CCNZ ,operation (const_int 0))))))
+  (when ccattr
+    `(set (reg:CCNZ REG_CC)
+	  (compare:CCNZ ,operation (const_int 0)))))
 
 (defun find-last-real-insn (parallel)
   (catch 'return
@@ -200,9 +194,19 @@
       (let* ((plist (parse-define-insn form hash))
 	     (ccattr (find-attr (plist-get plist :attribute) "cc"))
 	     (templ (plist-get plist :template))
+	     (alts (and ccattr (split-string ccattr ",")))
+	     (filter (cc-alts-filter alts))
 	     (operation (caddr (cadr (cadr (cadr templ)))))
 	     (result (resultify-cc-attr ccattr operation)))
-	(when result
+	(when (memq t filter)
+	  (dolist (repl (explode-comma-strings-in-templ templ))
+	    (goto-char (car (gethash (car repl) hash)))
+	    (let* ((p0 (point))
+		   (str (read (current-buffer)))
+		   (p1 (point)))
+	      (delete-region p0 p1)
+	      (insert (implode-to-constraint-string
+		       (filter-alts (cddr repl) filter)))))
 	  (let* ((oldstr (buffer-substring-no-properties
 			  (car (gethash form hash))
 			  (cdr (gethash form hash))))
@@ -280,34 +284,62 @@
     `(alts ,@(mapcar (lambda (str) (concat prefix str)) alts))))
 
 (defun explode-comma-strings-in-templ (templ)
-  (dolist (cons (all-conses templ))
-    (pcase cons
-      (`(match_operand ,(and mode (pred 'keywordp))
-		       ,number
-		       ,predicate
-		       . ,constraint)
-       (setcar constraint (explode-constraint-string constraint)))
-      (`(match_operand ,number
-		       ,(and predicate (pred 'stringp))
-		       . ,constraint)
-       (setcar constraint (explode-constraint-string constraint)))
-      (`(match_scratch ,(and mode (pred 'keywordp))
-		       ,number
-		       . ,constraint)
-       (setcar constraint (explode-constraint-string constraint)))
-      (`(set_attr "cc" . ,constraint)
-       (setcar constraint (explode-comma-string constraint))))))
+  (let (repls)
+    (dolist (cons (all-conses templ))
+      (pcase cons
+	(`(match_operand ,(and mode (pred keywordp))
+			 ,number
+			 ,predicate
+			 . ,constraint)
+	 (push (cons constraint
+		     (explode-constraint-string (car constraint)))
+	       repls))
+	(`(match_operand ,number
+			 ,(and predicate (pred stringp))
+			 . ,constraint)
+	 (push (cons constraint
+		     (explode-constraint-string (car constraint)))
+	       repls))
+	(`(match_scratch ,(and mode (pred keywordp))
+			 ,number
+			 . ,constraint)
+	 (push (cons constraint
+		     (explode-constraint-string (car constraint)))
+	       repls))
+	(`(set_attr "cc" . ,constraint)
+	 (push (cons constraint
+		     (explode-constraint-string (car constraint)))
+	       repls))))
+    (nreverse repls)))
 
-(defun filter-alts-in-templ (templ bools)
-  (dolist (cons (all-conses templ))
-    (pcase cons
-      (`(alts . ,alts)
-       (let (newalts)
-	 (dolist (alt alts)
-	   (when (car bools)
-	     (push alt newalts))
-	   (setq bools (cdr bools)))
-	 (setcdr cons (nreverse newalts)))))))
+(defun implode-to-comma-string (alts)
+  (mapconcat #'identity alts ","))
+
+(defun implode-to-constraint-string (alts)
+  (if alts
+      (let ((prefix ""))
+	(cond ((eq (aref (car alts) 0) ?=)
+	       (setq prefix "="))
+	      ((eq (aref (car alts) 0) ?%)
+	       (setq prefix "%")))
+	(concat prefix
+		(mapconcat (lambda (str) (substring str (length prefix)))
+			   alts ",")))))
+
+(defun filter-alts (alts bools)
+  (let (newalts)
+    (dolist (alt alts)
+      (when (car bools)
+	(push alt newalts))
+      (setq bools (cdr bools)))
+    (nreverse newalts)))
+
+(defun cc-alts-filter (alts)
+  (let (filter)
+    (dolist (alt alts)
+      (push (not (null (member alt '("set_vzn" "set_zn" "set_czn"))))
+	    filter))
+    (nreverse filter)))
 
 (defun fix-splitter ()
   (let* ((hash (make-hash-table))
@@ -319,6 +351,8 @@
 	 (np1 (cdr nps))
 	 (attributes (plist-get plist :attribute))
 	 (ccattr (find-attr attributes "cc"))
+	 (alts (and ccattr (split-string ccattr ",")))
+	 (filter (cc-alts-filter alts))
 	 (templ (plist-get plist :template))
 	 (n (1+ (max-operand templ)))
 	 (clobber (clobberify-cc-attr ccattr n t)))
@@ -608,7 +642,7 @@
   (let ((stack (list nil))
 	(p0stack (list (point-marker))))
     (while (not (eobp))
-      (cond 
+      (cond
        ((looking-at-p ";")
 	(myread-skip-comment))
        ((looking-at-p "[ \t\n]")
@@ -618,14 +652,36 @@
 	(push (point-marker) p0stack)
 	(forward-char))
        ((looking-at-p "\"")
-	(push (read (current-buffer)) (car stack)))
+	(let* ((p0 (point-marker))
+	       (val (read (current-buffer)))
+	       (p1 (point-marker)))
+	  (push (cons (cons p0 p1) val) (car stack))))
        ((looking-at-p ")")
 	(forward-char)
-	(let ((list (pop stack)))
-	  (push (nreverse list) (car stack))
-	  (puthash (caar stack) (cons (pop p0stack) (point-marker)) hash)))
-       ((push (read (current-buffer)) (car stack)))))
-    (nreverse (car stack))))
+	(let ((p0 (pop p0stack))
+	      (p1 (point-marker)))
+	  (let* ((list (pop stack))
+		 vlist)
+	    (dolist (l list)
+	      (push (cdr l) vlist)
+	      (puthash vlist (cons (caar l) p1) hash)
+	      )
+	    (puthash vlist (cons p0 p1) hash)
+	    (push (cons (cons p0 p1)
+			vlist)
+		  (car stack)))))
+       ((let* ((p0 (point-marker))
+	       (val (read (current-buffer)))
+	       (p1 (point-marker)))
+	  (push (cons (cons p0 p1) val) (car stack))))))
+    (let* ((list (pop stack))
+	   vlist)
+      (dolist (l list)
+	(push (cdr l) vlist)
+	;;(puthash vlist (cons (caar l) (point-marker)) hash)
+	)
+      (puthash vlist (cons (pop p0stack) (point-marker)) hash)
+      vlist)))
 
 (defun myread-single-form (hash)
   (catch 'return
