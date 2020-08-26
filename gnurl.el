@@ -131,13 +131,14 @@
 	       `(clobber (reg :CC REG_CC)))
 	      (force
 	       `(clobber (match_dup ,n)))
-	      (`(clobber (match_scratch:CC ,n,(concat "="
-						      (mapconcat (lambda (str)
-								   (if (equal str "none")
-								       "X"
-								     "c"))
-								 attrs
-								 ","))))))))))
+	      (`(clobber (match_scratch :CC
+			  ,n ,(concat "="
+				      (mapconcat (lambda (str)
+						   (if (equal str "none")
+						       "X"
+						     "c"))
+						 attrs
+						 ","))))))))))
 (defun filter-cc-attr (ccattr)
   (let ((attrs (split-string ccattr)))
     (mapcar (lambda (attr) (and (member attr
@@ -188,8 +189,13 @@
 	    (insert (format "%S" clobber)))
 	  (goto-char (car (gethash form hash)))
 	  (forward-char 14)
-	  (unless (looking-at-p "\\*")
-	    (insert "*"))
+	  (cond
+	   ((looking-at-p "call_insn")
+	    (insert "cc_"))
+	   ((looking-at-p "call_value_insn")
+	    (insert "cc_"))
+	   ((looking-at-p "\\*"))
+	   ((insert "*")))
 	  (puthash templ t clobbered-insns))))))
 
 (defun add-results ()
@@ -252,11 +258,11 @@
 	  (when (memq t filter)
 	    (when condition-cons
 	      (let* ((oldc (car condition-cons))
-		     (newc (if (equal oldc "")
-			       "avr_gen_cc_result (insn, operands) != NULL"
-			     (concat oldc
-				     " && "
-				     "(avr_gen_cc_result (insn, operands) != NULL)")))
+		     (addc
+		      "(avr_gen_cc_result (insn, operands) != NULL)")
+		     (newc
+		      (if (equal oldc "") addc
+			(concat "(" oldc ") && " addc)))
 		     (entry (gethash condition-cons hash))
 		     (p0 (car entry))
 		     (p1 (save-excursion
