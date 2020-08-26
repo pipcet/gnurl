@@ -145,9 +145,10 @@
 				t)))))
 
 (defun resultify-cc-attr (ccattr operation)
-  (when ccattr
-    `(set (reg:CCNZ REG_CC)
-	  (compare:CCNZ ,operation (const_int 0)))))
+  (cond ((not ccattr) nil)
+	((equal ccattr "clobber") nil)
+	(`(set (reg:CCNZ REG_CC)
+	       (compare:CCNZ ,operation (const_int 0))))))
 
 (defun find-last-real-insn (parallel)
   (catch 'return
@@ -202,8 +203,9 @@
 	     (alts (and ccattr (split-string ccattr ",")))
 	     (filter (cc-alts-filter alts))
 	     (operation (caddr (cadr (cadr (cadr templ)))))
-	     (result (resultify-cc-attr ccattr operation)))
-	(when (memq t filter)
+	     (result (and ccattr (resultify-cc-attr ccattr operation))))
+	(when (and (memq t filter)
+		   result)
 	  (let* ((oldstr (buffer-substring-no-properties
 			  (car (gethash form hash))
 			  (cdr (gethash form hash))))
@@ -251,10 +253,10 @@
 	    (when condition-cons
 	      (let* ((oldc (car condition-cons))
 		     (newc (if (equal oldc "")
-			       "avr_gen_cc_result (insn) != NULL"
+			       "avr_gen_cc_result (insn, operands) != NULL"
 			     (concat oldc
 				     " && "
-				     "(avr_gen_cc_result (insn) != NULL)")))
+				     "(avr_gen_cc_result (insn, operands) != NULL)")))
 		     (entry (gethash condition-cons hash))
 		     (p0 (car entry))
 		     (p1 (save-excursion
@@ -308,7 +310,10 @@
 	       t)))))
 
 (defun explode-comma-string (str)
-    `(alts-comma ,@(split-string str ",")))
+  (let ((alts (split-string str ",")))
+    (if (= (length alts) 1)
+	str
+      `(alts-comma ,@(split-string str ",")))))
 
 (defun explode-at-string (str)
   (if (string-match "^@\n" str)
@@ -329,7 +334,9 @@
       (setq prefix "+")
       (setq constraint (substring constraint 1))))
     (setq alts (split-string constraint ","))
-    `(alts-constraint ,@(mapcar (lambda (str) (concat prefix str)) alts))))
+    (if (= (length alts) 1)
+	constraint
+      `(alts-constraint ,@(mapcar (lambda (str) (concat prefix str)) alts)))))
 
 (defun explode-comma-strings-in-templ (templ)
   (let (repls)
@@ -362,6 +369,8 @@
 	 (push (cons constraint
 		     (explode-constraint-string (car constraint)))
 	       repls))))
+    (setq repls (seq-filter (lambda (c) (not (stringp (cdr c))))
+			    repls))
     (nreverse repls)))
 
 (defun implode-alts (alts)
@@ -369,7 +378,8 @@
     (`(alts-constraint . ,alts)
      (implode-to-constraint-string alts))
     (`(alts-at . ,alts)
-     (implode-to-at-string alts))))
+     (implode-to-at-string alts))
+    (alts alts)))
 
 (defun implode-to-at-string (alts)
   (concat "@\n"
@@ -402,8 +412,9 @@
 (defun cc-alts-filter (alts)
   (let (filter)
     (dolist (alt alts)
-      (push (not (null (member alt '("set_vzn" "set_zn" "set_czn"))))
-	    filter))
+      (push t filter))
+    ;(push (not (null (member alt '("set_vzn" "set_zn" "set_czn"))))
+    ; filter))
     (nreverse filter)))
 
 (defun fix-splitter ()
