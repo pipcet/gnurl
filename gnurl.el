@@ -10,6 +10,7 @@
 	 (when (consp (car rest))
 	   (setq plist (plist-put plist :pattern (pop rest))))
 	 (when (stringp (car rest))
+	   (setq plist (plist-put plist :condition-cons rest))
 	   (setq plist (plist-put plist :condition (pop rest))))
 	 (setq plist (plist-put plist :replacement (pop rest))))
 	 (when (car rest)
@@ -30,6 +31,7 @@
 	 (when (consp (car rest))
 	   (setq plist (plist-put plist :pattern (pop rest))))
 	 (when (stringp (car rest))
+	   (setq plist (plist-put plist :condition-cons rest))
 	   (setq plist (plist-put plist :condition (pop rest))))
 	 (when (consp (car rest))
 	   (setq plist (plist-put plist :replacement (pop rest))))
@@ -62,6 +64,7 @@
 	 (when (consp (car rest))
 	   (setq plist (plist-put plist :template (pop rest))))
 	 (when (stringp (car rest))
+	   (setq plist (plist-put plist :condition-cons rest))
 	   (setq plist (plist-put plist :condition (pop rest))))
 	 (when (consp rest)
 	   (setq plist (plist-put plist :assembler (pop rest))))
@@ -81,7 +84,7 @@
 	     nil
 	   plist))))
 
-(defun parse-define-insn (expr hash &optional tag)
+(defun parse-define-insn (expr hash &optional tag restrict)
   (unless tag
     (setq tag 'define_insn))
   (and (consp expr)
@@ -93,6 +96,7 @@
 	 (when (consp (car rest))
 	   (setq plist (plist-put plist :template (pop rest))))
 	 (when (stringp (car rest))
+	   (setq plist (plist-put plist :condition-cons rest))
 	   (setq plist (plist-put plist :condition (pop rest))))
 	 (when (consp rest)
 	   (setq plist (plist-put plist :assembler (pop rest))))
@@ -102,7 +106,8 @@
 	 ;;   (`(,hash . ,template)
 	 ;;    (setq plist (plist-put plist :template template))
 	 ;;    (setq plist (plist-put plist :operands hash))))
-	 (if (find-cc-reference plist)
+	 (if (and restrict
+		  (find-cc-reference plist))
 	     nil
 	   plist))))
 
@@ -159,7 +164,7 @@
   (let* ((hash (make-hash-table))
 	 (forms (myread hash)))
     (dolist (form forms)
-      (let* ((plist (parse-define-insn form hash))
+      (let* ((plist (parse-define-insn form hash nil t))
 	     (ccattr (find-attr (plist-get plist :attribute) "cc"))
 	     (templ (plist-get plist :template))
 	     (n (1+ (max-operand templ)))
@@ -191,7 +196,7 @@
   (let* ((hash (make-hash-table))
 	 (forms (myread hash)))
     (dolist (form forms)
-      (let* ((plist (parse-define-insn form hash))
+      (let* ((plist (parse-define-insn form hash nil t))
 	     (ccattr (find-attr (plist-get plist :attribute) "cc"))
 	     (templ (plist-get plist :template))
 	     (alts (and ccattr (split-string ccattr ",")))
@@ -199,14 +204,6 @@
 	     (operation (caddr (cadr (cadr (cadr templ)))))
 	     (result (resultify-cc-attr ccattr operation)))
 	(when (memq t filter)
-	  (dolist (repl (explode-comma-strings-in-templ templ))
-	    (goto-char (car (gethash (car repl) hash)))
-	    (let* ((p0 (point))
-		   (str (read (current-buffer)))
-		   (p1 (point)))
-	      (delete-region p0 p1)
-	      (insert (implode-to-constraint-string
-		       (filter-alts (cddr repl) filter)))))
 	  (let* ((oldstr (buffer-substring-no-properties
 			  (car (gethash form hash))
 			  (cdr (gethash form hash))))
@@ -234,6 +231,50 @@
 	    (insert oldstr)
 	    (when (not (equal oldstr ""))
 	      (insert "\n\n"))))))))
+
+(defun fix-results ()
+  (goto-char (point-min))
+  (let* ((hash (make-hash-table))
+	 (forms (myread hash)))
+    (dolist (form forms)
+      (when (catch 'found
+	      (dolist (cons (all-conses form))
+		(pcase cons (`(reg:CCNZ REG_CC) (throw 'found t)))))
+	(let* ((plist (parse-define-insn form hash nil nil))
+	       (ccattr (find-attr (plist-get plist :attribute) "cc"))
+	       (templ (plist-get plist :template))
+	       (alts (and ccattr (split-string ccattr ",")))
+	       (filter (cc-alts-filter alts))
+	       (operation (caddr (cadr (cadr (cadr templ)))))
+	       (condition-cons (plist-get plist :condition-cons)))
+	  (when (memq t filter)
+	    (when condition-cons
+	      (let* ((oldc (car condition-cons))
+		     (newc (if (equal oldc "")
+			       "avr_gen_cc_result (insn) != NULL"
+			     (concat oldc
+				     " && "
+				     "(avr_gen_cc_result (insn) != NULL)")))
+		     (entry (gethash condition-cons hash))
+		     (p0 (car entry))
+		     (p1 (save-excursion
+			   (goto-char p0)
+			   (read (current-buffer))
+			   (point-marker))))
+		(goto-char p0)
+		(delete-region p0 p1)
+		(insert (format "%S" newc))))
+	    (dolist (repl (explode-comma-strings-in-templ form))
+	      (goto-char (car (gethash (car repl) hash)))
+	      (let* ((p0 (point))
+		     (str (read (current-buffer)))
+		     (p1 (point))
+		     (replacement (implode-alts
+				   (cons (cadr repl)
+					 (filter-alts (cddr repl) filter)))))
+		(delete-region p0 p1)
+		(insert (format "%S" replacement))))))))))
+
 
 (defun fix-peepholes (clobbered-insns)
   (goto-char (point-min))
@@ -267,7 +308,11 @@
 	       t)))))
 
 (defun explode-comma-string (str)
-    `(alts ,@(split-string str ",")))
+    `(alts-comma ,@(split-string str ",")))
+
+(defun explode-at-string (str)
+  (if (string-match "^@\n" str)
+      `(alts-at ,@(cdr (split-string str "\n")))))
 
 (defun explode-constraint-string (constraint)
   (let ((prefix "")
@@ -279,9 +324,12 @@
       (setq constraint (substring constraint 1)))
      ((eq (aref constraint 0) ?%)
       (setq prefix "%")
+      (setq constraint (substring constraint 1)))
+     ((eq (aref constraint 0) ?+)
+      (setq prefix "+")
       (setq constraint (substring constraint 1))))
     (setq alts (split-string constraint ","))
-    `(alts ,@(mapcar (lambda (str) (concat prefix str)) alts))))
+    `(alts-constraint ,@(mapcar (lambda (str) (concat prefix str)) alts))))
 
 (defun explode-comma-strings-in-templ (templ)
   (let (repls)
@@ -306,11 +354,26 @@
 	 (push (cons constraint
 		     (explode-constraint-string (car constraint)))
 	       repls))
-	(`(set_attr "cc" . ,constraint)
+	(`(,(and (pred stringp) (pred (string-match "^@\n"))) . ,rest)
+	 (push (cons cons
+		     (explode-at-string (car cons)))
+	       repls))
+	(`(set_attr ,name . ,constraint)
 	 (push (cons constraint
 		     (explode-constraint-string (car constraint)))
 	       repls))))
     (nreverse repls)))
+
+(defun implode-alts (alts)
+  (pcase alts
+    (`(alts-constraint . ,alts)
+     (implode-to-constraint-string alts))
+    (`(alts-at . ,alts)
+     (implode-to-at-string alts))))
+
+(defun implode-to-at-string (alts)
+  (concat "@\n"
+	  (mapconcat #'identity alts "\n")))
 
 (defun implode-to-comma-string (alts)
   (mapconcat #'identity alts ","))
@@ -321,7 +384,9 @@
 	(cond ((eq (aref (car alts) 0) ?=)
 	       (setq prefix "="))
 	      ((eq (aref (car alts) 0) ?%)
-	       (setq prefix "%")))
+	       (setq prefix "%"))
+	      ((eq (aref (car alts) 0) ?+)
+	       (setq prefix "+")))
 	(concat prefix
 		(mapconcat (lambda (str) (substring str (length prefix)))
 			   alts ",")))))
@@ -381,7 +446,7 @@
   (let* ((hash (make-hash-table))
 	 (forms (myread hash)))
     (dolist (form forms)
-      (let* ((plist (parse-define-insn form hash))
+      (let* ((plist (parse-define-insn form hash nil t))
 	     (attrs (plist-get plist :attribute))
 	     (ccattr (find-attr (plist-get plist :attribute) "cc"))
 	     (templ (plist-get plist :template))
@@ -487,6 +552,7 @@
     (add-results)
     (add-clobbers clobbered-insns)
     (fix-peepholes clobbered-insns)
+    (fix-results)
     (dupify-insns)
     (make-all-insns-serial)))
 
