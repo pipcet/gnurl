@@ -188,6 +188,7 @@
 	    (insert (make-string ind ?\ ))
 	    (insert (format "%S" clobber)))
 	  (goto-char (car (gethash form hash)))
+	  (sit-for 0)
 	  (forward-char 14)
 	  (cond
 	   ((looking-at-p "call_insn")
@@ -270,18 +271,20 @@
 			   (read (current-buffer))
 			   (point-marker))))
 		(goto-char p0)
+		(sit-for 0)
 		(delete-region p0 p1)
 		(insert (format "%S" newc))))
-	    (dolist (repl (explode-comma-strings-in-templ form))
-	      (goto-char (car (gethash (car repl) hash)))
-	      (let* ((p0 (point))
-		     (str (read (current-buffer)))
-		     (p1 (point))
-		     (replacement (implode-alts
-				   (cons (cadr repl)
-					 (filter-alts (cddr repl) filter)))))
-		(delete-region p0 p1)
-		(insert (format "%S" replacement))))))))))
+	    ;; (dolist (repl (explode-comma-strings-in-templ form))
+	    ;;   (goto-char (car (gethash (car repl) hash)))
+	    ;;   (let* ((p0 (point))
+	    ;; 	     (str (read (current-buffer)))
+	    ;; 	     (p1 (point))
+	    ;; 	     (replacement (implode-alts
+	    ;; 			   (cons (cadr repl)
+	    ;; 				 (filter-alts (cddr repl) filter)))))
+	    ;; 	(delete-region p0 p1)
+	    ;; 	(insert (format "%S" replacement))))
+	    ))))))
 
 
 (defun fix-peepholes (clobbered-insns)
@@ -521,6 +524,7 @@
 	     (if (gethash cons hash2)
 		 (progn
 		   (goto-char (car (gethash cons hash)))
+		   (sit-for 0)
 		   (delete-region (point)
 				  (cdr (gethash cons hash)))
 		   (insert (format "%S"
@@ -558,6 +562,7 @@
 		(p0 (car ps))
 		(p1 (cdr ps)))
 	   (goto-char (1- p0))
+	   (sit-for 0)
 	   (delete-char (length "(vector (parallel "))
  	   (goto-char (- p1 2))
 	   (delete-char 2)))))))
@@ -571,6 +576,7 @@
     (fix-peepholes clobbered-insns)
     (fix-results)
     (dupify-insns)
+    (message "making all insns serial")
     (make-all-insns-serial)))
 
 (defun gnurlify (filename)
@@ -586,7 +592,9 @@
     (mangle-rtl-buffer)
     (convert-rtl-buffer)
     (goto-char (point-min))
+    (message "gnurl-to-rtl")
     (gnurl-to-rtl)
+    (message "writing file")
     (write-file (concat filename ".new"))))
 
 (defun gnurl-to-rtl-braced-string ()
@@ -623,8 +631,11 @@
 
 (defun gnurl-to-rtl ()
   (interactive)
+  (message "gnurl-to-elispified-rtl")
   (gnurl-to-elispified-rtl)
+  (message "indent-elispified-rtl")
   (indent-elispified-rtl)
+  (message "elispified-rtl-to-rtl")
   (elispified-rtl-to-rtl))
 
 (defun gnurl-to-elispified-rtl ()
@@ -639,6 +650,7 @@
       (when (eq (car-safe form) 'vector)
 	(save-excursion
 	  (goto-char (car (gethash form hash)))
+	  (sit-for 0)
 	  (delete-region (point)
 			 (+ (point) (length "(vector ")))
 	  (insert "["))
@@ -648,6 +660,7 @@
 	  (insert "]")))))
   (goto-char (point-min))
   (while (not (eobp))
+    (sit-for 0)
     (cond ((looking-at-p ";")
 	   (myread-skip-comment))
 	  ((looking-at-p "[ \t\n]")
@@ -655,7 +668,7 @@
 	  ((looking-at-p "[][()]")
 	   (forward-char))
 	  ((looking-at-p ":")
-	   (while (looking-back " ")
+	   (while (eq (char-after (1- (point))) ?\ )
 	     (forward-char -1)
 	     (delete-char 1))
 	   (forward-char))
